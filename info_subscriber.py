@@ -10,7 +10,6 @@ from nav_msgs.msg import MapMetaData, OccupancyGrid
 
 from visualization_msgs.msg import Marker, MarkerArray
 import matplotlib
-matplotlib.use('Agg')
 from matplotlib import pyplot
 from pyquaternion import Quaternion
 from gazebo_msgs.msg import ModelStates 
@@ -130,42 +129,49 @@ class map_reconstructor(object):
 
 
 class SD_algo(object):
-    def __init__(self, height, width):
+    def __init__(self, height, width, resolution):
+        self.height = height
+        self.width = width
         self.static_map = -1  * np.ones((height, width))
         self.dynamic_map = -1 * np.ones((height, width))
+        self.counter = 0
+        self.resolution = resolution
         print("initialized static/ dynamic map")
-        # self.dict_static = {} 
-        # self.dict_dynamic = {}
-        # self.prob_dict()
+        self.pub_stat = rospy.Publisher('/stat_map', OccupancyGrid, queue_size=10)
+        self.pub_dyn = rospy.Publisher('/dynamic_map', OccupancyGrid, queue_size=10)
         
     def update_sd_map(self, laser_measure):
         '''
         \param: laser_measure is a H x W array
 
         '''
-        #static map
-        # print(self.static_map)
         free_mask = (self.static_map >= 0) & (self.static_map < 90) # H x W 
-        # print(np.where(free_mask))
         unk_mask = self.static_map == -1 # H x W
-        occ_mask = self.static_map > 90 # H x W
+        occ_mask = self.static_map >= 90 # H x W
+        # print(np.where(free_mask))
+        # print("occ mask")
         # print(np.where(occ_mask))
+        # print("free mask")
+        # print(np.where(unk_mask) 
         
         laser_free_mask = laser_measure == 0  # H x W
         laser_occ_mask = laser_measure == 1 # H x W
         laser_unk_mask = laser_measure == -1 # H x W
 
         # print(np.where(laser_free_mask))
-
+        # print(np.where(laser_occ_mask))
+        print(np.where(laser_unk_mask))
         # deal with the numerical issue when unknown cell is intialized to -1
-        # tmp = np.log(self.static_map * free_mask / (101 - self.static_map * free_mask) + np.ones_like(self.static_map) * unk_mask)
         reformed_static_map = self.static_map * free_mask + np.ones_like(self.static_map) * unk_mask 
         # print(np.where((101 - reformed_static_map) == 0))
         # print(reformed_static_map / (101 - reformed_static_map))
         tmp = np.log(reformed_static_map / (101 - reformed_static_map))
+        
+        # print(np.where(laser_unk_mask & unk_mask))
+        #dynamic map
 
         #free | free
-        tmp1 = np.exp(np.log(0.3 / 0.7) + tmp)
+        tmp1 = np.exp(np.log(0.2 / 0.8) + tmp)
         map_ff = tmp1 /  (1 + tmp1)
         mask_ff = free_mask & laser_free_mask
 
@@ -175,44 +181,35 @@ class SD_algo(object):
         mask_uf = unk_mask & laser_free_mask
 
         #occ | free
-        tmp3 = np.exp(np.log(0.1 / 0.9) + tmp)
+        tmp3 = np.exp(np.log(0.2 / 0.8) + tmp)
         map_of = tmp3 /  (1 + tmp3)
         mask_of = occ_mask & laser_free_mask
  
         #free | occ
-        tmp4 = np.exp(np.log(0.1 / 0.9) + tmp)
-        map_fo = tmp4 /  (1 + tmp4)
+        tmp4 = np.exp(np.log(0.9 / 0.1) + tmp)
+        map_fo = tmp4 /  (1 + tmp4)      
         mask_fo = free_mask & laser_occ_mask
 
         #unk | occ
-        tmp5 = np.exp(np.log(0.7 / 0.3) + tmp)
+        tmp5 = np.exp(np.log(0.3 / 0.7) + tmp)
         map_uo = tmp5 /  (1 + tmp5)
         mask_uo = unk_mask & laser_occ_mask
 
         #occ | occ
-        tmp6 = np.exp(np.log(0.9 / 0.1) + tmp)
+        tmp6 = np.exp(np.log(0.6 / 0.5) + tmp)
         map_oo = tmp6 /  (1 + tmp6)
         mask_oo = occ_mask & laser_occ_mask
 
         mask_not = ~(mask_ff | mask_uf | mask_of | mask_fo | mask_uo | mask_oo)
-        # print("map_ff")
-        # print(map_ff)
-        # print("map_uf")
-        # print(map_uf)
-        # print("map_of")
-        # print(map_of)
-        # print("map_fo")
-        # print(map_fo) 
-        # print("map_uo")
-        # print(map_uo)
-        # print("map_oo")
-        # print(map_oo)
-
-
-        #dynamic map
+        # print(self.dynamic_map)
+        self.dynamic_map = self.static_map * mask_not + 100 * (map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
+                            + map_fo * mask_fo + map_uo * mask_uo + map_oo * mask_oo) 
+        
+        #static map
+        
 
         #free | free
-        tmp1 = np.exp(np.log(0.2 / 0.8) + tmp)
+        tmp1 = np.exp(np.log(0.3 / 0.7) + tmp)
         map_ff = tmp1 /  (1 + tmp1)
         # mask_ff = free_mask & laser_free_mask
 
@@ -222,45 +219,89 @@ class SD_algo(object):
         # mask_uf = unk_mask & laser_free_mask
 
         #occ | free
-        tmp3 = np.exp(np.log(0.2 / 0.8) + tmp)
+        tmp3 = np.exp(np.log(0.1 / 0.9) + tmp)
         map_of = tmp3 /  (1 + tmp3)
         # mask_of = occ_mask & laser_free_mask
  
         #free | occ
-        tmp4 = np.exp(np.log(0.9 / 0.1) + tmp)
-        map_fo = tmp4 /  (1 + tmp4)      
+        tmp4 = np.exp(np.log(0.1 / 0.9) + tmp)
+        map_fo = tmp4 /  (1 + tmp4)
         # mask_fo = free_mask & laser_occ_mask
 
         #unk | occ
-        tmp5 = np.exp(np.log(0.3 / 0.7) + tmp)
+        tmp5 = np.exp(np.log(0.7 / 0.3) + tmp)
         map_uo = tmp5 /  (1 + tmp5)
         # mask_uo = unk_mask & laser_occ_mask
 
         #occ | occ
-        tmp6 = np.exp(np.log(0.6 / 0.5) + tmp)
+        tmp6 = np.exp(np.log(0.9 / 0.1) + tmp)
         map_oo = tmp6 /  (1 + tmp6)
         # mask_oo = occ_mask & laser_occ_mask
 
-        # mask_not = ~(mask_ff | mask_uf | mask_of | mask_fo | mask_uo | mask_oo)
 
-        self.dynamic_map = self.static_map * mask_not + map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
-                            + map_fo * mask_fo + map_uo * mask_uo + map_oo * mask_oo 
-        
         self.static_map = self.static_map * mask_not + 100 * (map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
                             + map_fo * mask_fo + map_uo * mask_uo + map_oo * mask_oo) 
         self.static_map = np.clip(self.static_map, -1, 100)
-
+        # print(np.where(self.dynamic_map >50))
+        # if self.counter == 2:
+            # self.counter = 0
         self.static_map_visual()
+            # self.dynamic_map_visual()
 
     def static_map_visual(self):
         # tell imshow about color map so that only set colors are used
-        pyplot.close()
-        print("plot")
-        cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
-        bounds=[-2,0,90,120]
-        norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
-        img = pyplot.imshow(self.static_map,cmap = cmap,norm=norm)
-        pyplot.show(block=False)
+        # pyplot.close()
+        # cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
+        # bounds=[-2,0,90,120]
+        # norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
+        # img = pyplot.imshow(self.static_map,cmap = cmap,norm=norm)
+        # pyplot.show(block=False)
+                # tell imshow about color map so that only set colors are used
+        #pyplot.close()
+        #print("plot")
+        #cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
+        #bounds=[-2,0,90,120]
+        #norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
+        #img = pyplot.imshow(self.static_map,cmap = cmap,norm=norm)
+        #pyplot.show(block=False)
+        map_stat = OccupancyGrid()
+        map_stat.info.width = self.width
+        map_stat.info.height = self.height
+        map_stat.info.origin.position.x = -10.0
+        map_stat.info.origin.position.y = -10.0
+        map_stat.info.origin.position.z =   0.0
+        map_stat.info.origin.orientation.x = 0.0
+        map_stat.info.origin.orientation.y = 0.0
+        map_stat.info.origin.orientation.z = 0.0
+        map_stat.info.origin.orientation.w = 1.0
+        map_stat.info.resolution = self.resolution
+        stat = (self.static_map.T).astype(int)
+        map_stat.data = np.reshape( stat.tolist(), (self.width*self.height))
+        self.pub_stat.publish(map_stat)
+ 
+    def dynamic_map_visual(self):
+        # tell imshow about color map so that only set colors are used
+        # pyplot.close()
+        # cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
+        # bounds=[-2,0,90,120]
+        # norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
+        # img = pyplot.imshow(self.dynamic_map,cmap = cmap,norm=norm)
+        # pyplot.show(block=False)
+        #pyplot.show(block=False)
+        map_dyn = OccupancyGrid()
+        map_dyn.info.width = self.width
+        map_dyn.info.height = self.height
+        map_dyn.info.origin.position.x = -10.0
+        map_dyn.info.origin.position.y = -10.0
+        map_dyn.info.origin.position.z =   0.0
+        map_dyn.info.origin.orientation.x = 0.0
+        map_dyn.info.origin.orientation.y = 0.0
+        map_dyn.info.origin.orientation.z = 0.0
+        map_dyn.info.origin.orientation.w = 1.0
+        map_dyn.info.resolution = self.resolution
+        dyn = (self.dynamic_map.T).astype(int)
+        map_dyn.data = np.reshape(dyn.tolist(), (self.width * self.height))
+        self.pub_dyn.publish(map_dyn)
 
 
 '''
@@ -274,7 +315,7 @@ class info_sub(object):
         self.map_origin = [0,0,0,0,0,0,0]
         self.robot_pose = [0,0,0,0,0,0,0]
         self.detection = []
-        self.sd_al = SD_algo(self.map_height, self.map_width)
+        self.sd_al = SD_algo(self.map_height, self.map_width, 0.05)
         # var defined in self.functions
 
         
