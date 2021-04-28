@@ -7,9 +7,11 @@ from sensor_msgs.msg import LaserScan
 from sensor_msgs import point_cloud2
 from geometry_msgs.msg import Pose
 from nav_msgs.msg import MapMetaData, OccupancyGrid
-from matplotlib import pyplot
+
 from visualization_msgs.msg import Marker, MarkerArray
-import matplotlib as mpl
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot
 from pyquaternion import Quaternion
 from gazebo_msgs.msg import ModelStates 
 
@@ -88,9 +90,9 @@ class map_reconstructor(object):
     def laser_map_visual(self):
         # tell imshow about color map so that only set colors are used
         pyplot.close()
-        cmap = mpl.colors.ListedColormap(['grey', 'white','black'])
+        cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
         bounds=[-2,0,1,10]
-        norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+        norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
         robot_xind = int((self.robot_pose[0] - self.map_origin[0]) / self.map_resolution)
         robot_yind = int((self.robot_pose[1] - self.map_origin[1]) / self.map_resolution)
         self.laser_map[robot_xind, robot_yind] = 1
@@ -131,9 +133,10 @@ class SD_algo(object):
     def __init__(self, height, width):
         self.static_map = -1  * np.ones((height, width))
         self.dynamic_map = -1 * np.ones((height, width))
-        self.dict_static = {} 
-        self.dict_dynamic = {}
-        self.prob_dict()
+        print("initialized static/ dynamic map")
+        # self.dict_static = {} 
+        # self.dict_dynamic = {}
+        # self.prob_dict()
         
     def update_sd_map(self, laser_measure):
         '''
@@ -141,17 +144,27 @@ class SD_algo(object):
 
         '''
         #static map
+        # print(self.static_map)
         free_mask = (self.static_map >= 0) & (self.static_map < 90) # H x W 
+        # print(np.where(free_mask))
         unk_mask = self.static_map == -1 # H x W
         occ_mask = self.static_map > 90 # H x W
+        # print(np.where(occ_mask))
         
         laser_free_mask = laser_measure == 0  # H x W
         laser_occ_mask = laser_measure == 1 # H x W
         laser_unk_mask = laser_measure == -1 # H x W
 
-        tmp = np.log(self.static_map / (101 - self.static_map))
+        # print(np.where(laser_free_mask))
 
-        #free | free\
+        # deal with the numerical issue when unknown cell is intialized to -1
+        # tmp = np.log(self.static_map * free_mask / (101 - self.static_map * free_mask) + np.ones_like(self.static_map) * unk_mask)
+        reformed_static_map = self.static_map * free_mask + np.ones_like(self.static_map) * unk_mask 
+        # print(np.where((101 - reformed_static_map) == 0))
+        # print(reformed_static_map / (101 - reformed_static_map))
+        tmp = np.log(reformed_static_map / (101 - reformed_static_map))
+
+        #free | free
         tmp1 = np.exp(np.log(0.3 / 0.7) + tmp)
         map_ff = tmp1 /  (1 + tmp1)
         mask_ff = free_mask & laser_free_mask
@@ -168,7 +181,7 @@ class SD_algo(object):
  
         #free | occ
         tmp4 = np.exp(np.log(0.1 / 0.9) + tmp)
-        map_fo = tmp4 /  (1 + tmp4)      
+        map_fo = tmp4 /  (1 + tmp4)
         mask_fo = free_mask & laser_occ_mask
 
         #unk | occ
@@ -182,7 +195,18 @@ class SD_algo(object):
         mask_oo = occ_mask & laser_occ_mask
 
         mask_not = ~(mask_ff | mask_uf | mask_of | mask_fo | mask_uo | mask_oo)
-
+        # print("map_ff")
+        # print(map_ff)
+        # print("map_uf")
+        # print(map_uf)
+        # print("map_of")
+        # print(map_of)
+        # print("map_fo")
+        # print(map_fo) 
+        # print("map_uo")
+        # print(map_uo)
+        # print("map_oo")
+        # print(map_oo)
 
 
         #dynamic map
@@ -222,11 +246,21 @@ class SD_algo(object):
         self.dynamic_map = self.static_map * mask_not + map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
                             + map_fo * mask_fo + map_uo * mask_uo + map_oo * mask_oo 
         
-        self.static_map = self.static_map * mask_not + map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
-                            + map_fo * mask_fo + map_uo * mask_uo + map_oo * mask_oo 
-        
-        return
+        self.static_map = self.static_map * mask_not + 100 * (map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
+                            + map_fo * mask_fo + map_uo * mask_uo + map_oo * mask_oo) 
+        self.static_map = np.clip(self.static_map, -1, 100)
 
+        self.static_map_visual()
+
+    def static_map_visual(self):
+        # tell imshow about color map so that only set colors are used
+        pyplot.close()
+        print("plot")
+        cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
+        bounds=[-2,0,90,120]
+        norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
+        img = pyplot.imshow(self.static_map,cmap = cmap,norm=norm)
+        pyplot.show(block=False)
 
 
 '''
@@ -240,6 +274,7 @@ class info_sub(object):
         self.map_origin = [0,0,0,0,0,0,0]
         self.robot_pose = [0,0,0,0,0,0,0]
         self.detection = []
+        self.sd_al = SD_algo(self.map_height, self.map_width)
         # var defined in self.functions
 
         
@@ -272,13 +307,15 @@ class info_sub(object):
         self.map = np.array(map.data).reshape((self.map_height, self.map_width))
         lv = map_reconstructor(self.robot_pose, self.detection, self.map) 
         lv.create_laser_map()
+        self.sd_al.update_sd_map(lv.laser_map)
+
 
     def map_visualization(self):
         # tell imshow about color map so that only set colors are used
         self.map = self.map.reshape((self.map_width, self.map_height))
-        cmap = mpl.colors.ListedColormap(['grey', 'white','black'])
+        cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
         bounds=[-6,0,90,200]
-        norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+        norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
         img = pyplot.imshow(self.map,cmap = cmap,norm=norm)
         pyplot.show(block=False)
 
