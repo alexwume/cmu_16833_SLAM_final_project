@@ -30,6 +30,7 @@ class map_reconstructor(object):
         self.robot_pose = robot_pose #[x,y,z, qx,qy,qz,qw] (7,)
         
         self.laser_data = laser_data #360 laser readings (360, )
+        self.laser_max = 3.5
         self.map = curr_map
         self.map_resolution = 0.05
         self.map_origin = np.array([-10, -10, 0])
@@ -67,15 +68,21 @@ class map_reconstructor(object):
                 self.laser_map[i_x, i_y] = 0
                 cur_dist = cur_dist + self.map_resolution
 
-        
+        laser_nonmax_mask = self.laser_data < self.laser_max
+        self.laser_data = self.laser_data[laser_nonmax_mask]
+        ang = ang[laser_nonmax_mask]
         laser_x = self.robot_pose[0] +  self.laser_data * np.cos(ang) # 360 x 1
         laser_y = self.robot_pose[1] +  self.laser_data * np.sin(ang) # 360 x 1
 
         # visualize the laser results, this is only for testing purposes
-        self.laser_visualization_rviz(laser_x, laser_y)
+        # self.laser_visualization_rviz(laser_x, laser_y)
+
 
         laser_x -= self.map_origin[0]
         laser_y -= self.map_origin[1]
+
+
+
 
         ind_x = (laser_x / self.map_resolution).astype(int)
         ind_y = (laser_y / self.map_resolution).astype(int)
@@ -110,6 +117,7 @@ class map_reconstructor(object):
         for count in range(360):
             marker = Marker()
             marker.header.frame_id = "/map"
+            marker.id = count
             marker.type = marker.SPHERE
             marker.action = marker.ADD
             marker.scale.x = 1.0
@@ -124,8 +132,7 @@ class map_reconstructor(object):
             marker.pose.position.y = y_data[count]
             marker.pose.position.z = 1
             markerArray.markers.append(marker)
-            count += 1
-            publisher.publish(markerArray)
+        publisher.publish(markerArray)
 
 
 class SD_algo(object):
@@ -137,38 +144,41 @@ class SD_algo(object):
         self.counter = 0
         self.resolution = resolution
         print("initialized static/ dynamic map")
-        self.pub_stat = rospy.Publisher('/stat_map', OccupancyGrid, queue_size=10)
+        self.pub_stat = rospy.Publisher('/static_map', OccupancyGrid, queue_size=10)
         self.pub_dyn = rospy.Publisher('/dynamic_map', OccupancyGrid, queue_size=10)
         
     def update_sd_map(self, laser_measure):
-        '''
-        \param: laser_measure is a H x W array
 
         '''
-        free_mask = (self.static_map >= 0) & (self.static_map < 90) # H x W 
+        \param: laser_measure is a H x W array
+        '''
+
+        eps = 0.001
+        #static map masks
+        free_mask = (self.static_map >= 0) & (self.static_map < 80) # H x W 
+        nonzero_mask = self.static_map > 0
         unk_mask = self.static_map == -1 # H x W
-        occ_mask = self.static_map >= 90 # H x W
-        # print(np.where(free_mask))
-        # print("occ mask")
-        # print(np.where(occ_mask))
-        # print("free mask")
-        # print(np.where(unk_mask) 
-        
+        occ_mask = self.static_map >= 80 # H x W
+
+        #dynamic map masks
+        free_mask_d = (self.dynamic_map >= 0) & (self.dynamic_map < 80) # H x W 
+        nonzero_mask_d = self.dynamic_map > 0
+        unk_mask_d = self.dynamic_map == -1 # H x W
+        occ_mask_d = self.dynamic_map >= 80 # H x W
+
+        #laser masks
         laser_free_mask = laser_measure == 0  # H x W
         laser_occ_mask = laser_measure == 1 # H x W
         laser_unk_mask = laser_measure == -1 # H x W
 
-        # print(np.where(laser_free_mask))
-        # print(np.where(laser_occ_mask))
-        print(np.where(laser_unk_mask))
-        # deal with the numerical issue when unknown cell is intialized to -1
-        reformed_static_map = self.static_map * free_mask + np.ones_like(self.static_map) * unk_mask 
-        # print(np.where((101 - reformed_static_map) == 0))
-        # print(reformed_static_map / (101 - reformed_static_map))
-        tmp = np.log(reformed_static_map / (101 - reformed_static_map))
-        
-        # print(np.where(laser_unk_mask & unk_mask))
+
+ 
         #dynamic map
+
+        # deal with the numerical issue when unknown cell is intialized to -1
+        reformed_dynamic_map = self.dynamic_map * nonzero_mask_d + eps *np.ones_like(self.dynamic_map) * ~nonzero_mask_d
+
+        tmp = np.log(reformed_dynamic_map / (101 - reformed_dynamic_map))
 
         #free | free
         tmp1 = np.exp(np.log(0.2 / 0.8) + tmp)
@@ -191,30 +201,37 @@ class SD_algo(object):
         mask_fo = free_mask & laser_occ_mask
 
         #unk | occ
-        tmp5 = np.exp(np.log(0.3 / 0.7) + tmp)
+        tmp5 = np.exp(np.log(0.3 / 0.7))
         map_uo = tmp5 /  (1 + tmp5)
         mask_uo = unk_mask & laser_occ_mask
 
         #occ | occ
-        tmp6 = np.exp(np.log(0.6 / 0.5) + tmp)
+        tmp6 = np.exp(np.log(0.3 / 0.7) + tmp)
         map_oo = tmp6 /  (1 + tmp6)
         mask_oo = occ_mask & laser_occ_mask
 
         mask_not = ~(mask_ff | mask_uf | mask_of | mask_fo | mask_uo | mask_oo)
         # print(self.dynamic_map)
-        self.dynamic_map = self.static_map * mask_not + 100 * (map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
+
+        self.dynamic_map = self.dynamic_map * mask_not + 100 * (map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
                             + map_fo * mask_fo + map_uo * mask_uo + map_oo * mask_oo) 
-        
+
+        unk_mask_d = self.dynamic_map == -1
+        self.dynamic_map = np.clip(self.dynamic_map, 10, 100) * ~unk_mask_d + self.dynamic_map * unk_mask_d         
         #static map
         
+        # deal with the numerical issue when unknown cell is intialized to -1
+        reformed_static_map = self.static_map * nonzero_mask + eps *np.ones_like(self.static_map) * ~nonzero_mask
+
+        tmp = np.log(reformed_static_map / (101 - reformed_static_map))
 
         #free | free
-        tmp1 = np.exp(np.log(0.3 / 0.7) + tmp)
+        tmp1 = np.exp(np.log(0.1 / 0.8) + tmp)
         map_ff = tmp1 /  (1 + tmp1)
         # mask_ff = free_mask & laser_free_mask
 
         #unk | free
-        tmp2 = np.exp(np.log(0.2 / 0.8) + tmp)
+        tmp2 = np.exp(np.log(0.1 / 0.8) + tmp)
         map_uf = tmp2 /  (1 + tmp2)
         # mask_uf = unk_mask & laser_free_mask
 
@@ -229,7 +246,7 @@ class SD_algo(object):
         # mask_fo = free_mask & laser_occ_mask
 
         #unk | occ
-        tmp5 = np.exp(np.log(0.7 / 0.3) + tmp)
+        tmp5 = np.exp(np.log(0.9 / 0.1))
         map_uo = tmp5 /  (1 + tmp5)
         # mask_uo = unk_mask & laser_occ_mask
 
@@ -241,12 +258,15 @@ class SD_algo(object):
 
         self.static_map = self.static_map * mask_not + 100 * (map_ff * mask_ff + map_uf * mask_uf + map_of * mask_of \
                             + map_fo * mask_fo + map_uo * mask_uo + map_oo * mask_oo) 
-        self.static_map = np.clip(self.static_map, -1, 100)
-        # print(np.where(self.dynamic_map >50))
+        
+        unk_mask = self.static_map == -1
+        self.static_map = np.clip(self.static_map, 10, 100) * ~unk_mask + self.static_map * unk_mask 
+
+        # self.counter +=1
         # if self.counter == 2:
             # self.counter = 0
         self.static_map_visual()
-            # self.dynamic_map_visual()
+        self.dynamic_map_visual()
 
     def static_map_visual(self):
         # tell imshow about color map so that only set colors are used
@@ -256,14 +276,6 @@ class SD_algo(object):
         # norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
         # img = pyplot.imshow(self.static_map,cmap = cmap,norm=norm)
         # pyplot.show(block=False)
-                # tell imshow about color map so that only set colors are used
-        #pyplot.close()
-        #print("plot")
-        #cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
-        #bounds=[-2,0,90,120]
-        #norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
-        #img = pyplot.imshow(self.static_map,cmap = cmap,norm=norm)
-        #pyplot.show(block=False)
         map_stat = OccupancyGrid()
         map_stat.info.width = self.width
         map_stat.info.height = self.height
@@ -287,7 +299,7 @@ class SD_algo(object):
         # norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
         # img = pyplot.imshow(self.dynamic_map,cmap = cmap,norm=norm)
         # pyplot.show(block=False)
-        #pyplot.show(block=False)
+
         map_dyn = OccupancyGrid()
         map_dyn.info.width = self.width
         map_dyn.info.height = self.height
