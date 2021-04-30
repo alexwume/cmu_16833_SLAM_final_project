@@ -5,15 +5,14 @@ import numpy as np
 from std_msgs.msg import String
 from sensor_msgs.msg import LaserScan
 from sensor_msgs import point_cloud2
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import MapMetaData, OccupancyGrid
 
 from visualization_msgs.msg import Marker, MarkerArray
 import matplotlib
 from matplotlib import pyplot
-from pyquaternion import Quaternion
 from gazebo_msgs.msg import ModelStates 
-
+from scipy.spatial.transform import Rotation as R
 
 '''
 author: Alex Wu
@@ -22,7 +21,7 @@ purpose: cmu-16883 final project
 '''
 
 class map_reconstructor(object):
-    def __init__(self, robot_pose, laser_data, curr_map):
+    def __init__(self, robot_pose, laser_data):
         '''
         \param: robot_pose: robot poses from gazebo simulation. [xyz(translation), xyzw(orientation quaternion)]
         \param: laser_reading: 360 laser readings
@@ -31,7 +30,6 @@ class map_reconstructor(object):
         
         self.laser_data = laser_data #360 laser readings (360, )
         self.laser_max = 3.5
-        self.map = curr_map
         self.map_resolution = 0.05
         self.map_origin = np.array([-10, -10, 0])
         self.laser_map = -1 * np.ones((384, 384))
@@ -45,16 +43,13 @@ class map_reconstructor(object):
             return
 
         # create quaternion
-        curr_quater = Quaternion(self.robot_pose[6], self.robot_pose[3], self.robot_pose[4], self.robot_pose[5])
+        r = R.from_quat(self.robot_pose[3:])
+
+
         # retrieve theta from quaternion
-        theta = curr_quater.angle * 180 / np.pi # convert it into degree to do increment later
+        theta = r.as_euler('zyx', degrees = True)[0]
+        # print("degree: ", theta)
 
-        # print("theta", theta * 180 / np.pi )
-
-        ang = np.arange(360) + theta# 0 ~ 359 degree
-        ang = ang * np.pi / 180 # in radian
-        # print(len(self.laser_data * np.cos(ang)))
-       
 
         for i in range(360):
             cur_dist = 0
@@ -62,35 +57,40 @@ class map_reconstructor(object):
             while cur_dist < laser_dist:
                 lx = self.robot_pose[0] +  cur_dist * np.cos((theta + i) * np.pi / 180) - self.map_origin[0] # 360 x 1
                 ly = self.robot_pose[1] +  cur_dist * np.sin((theta + i) * np.pi / 180) - self.map_origin[1]# 360 x 1
+                # lx = self.robot_pose[0] +  cur_dist * np.cos((theta + i) * np.pi / 180) # 360 x 1
+                # ly = self.robot_pose[1] +  cur_dist * np.sin((theta + i) * np.pi / 180) # 360 x 1
+                
 
                 i_x = (lx / self.map_resolution).astype(int)
                 i_y = (ly / self.map_resolution).astype(int)
                 self.laser_map[i_x, i_y] = 0
                 cur_dist = cur_dist + self.map_resolution
+        
+        
+        ang = np.arange(360) + theta # 0 ~ 359 degree
+        ang = ang * np.pi / 180 # in radian
 
+        # make sure the max range reading laser doesn't assume there is an object at the end of the laser range
         laser_nonmax_mask = self.laser_data < self.laser_max
         self.laser_data = self.laser_data[laser_nonmax_mask]
         ang = ang[laser_nonmax_mask]
-        laser_x = self.robot_pose[0] +  self.laser_data * np.cos(ang) # 360 x 1
-        laser_y = self.robot_pose[1] +  self.laser_data * np.sin(ang) # 360 x 1
+        
+        laser_x = self.robot_pose[0] +  self.laser_data * np.cos(ang) - self.map_origin[0]
+        laser_y = self.robot_pose[1] +  self.laser_data * np.sin(ang) - self.map_origin[1]
+
 
         # visualize the laser results, this is only for testing purposes
-        # self.laser_visualization_rviz(laser_x, laser_y)
-
-
-        laser_x -= self.map_origin[0]
-        laser_y -= self.map_origin[1]
-
-
-
+        self.laser_visualization_rviz(laser_x, laser_y)
 
         ind_x = (laser_x / self.map_resolution).astype(int)
         ind_y = (laser_y / self.map_resolution).astype(int)
 
         # set the detected points to 1
         self.laser_map[ind_x, ind_y] = 1
+
         # visualize the laser_map for testing purposes
         # self.laser_map_visual()
+
 
 
     def laser_map_visual(self):
@@ -109,28 +109,39 @@ class map_reconstructor(object):
 
     def laser_visualization_rviz(self, x_data, y_data):
         
+        num = len(x_data)
+        # num = 1 #debug 
+        # print("visualize laser pose")
+        # print(x_data, y_data)
         topic = 'visualization_marker_array'
-        publisher = rospy.Publisher(topic, MarkerArray, queue_size=360)
+        publisher = rospy.Publisher(topic, MarkerArray, queue_size=1)
 
         markerArray = MarkerArray()
 
-        for count in range(360):
+        for count in range(num):
             marker = Marker()
             marker.header.frame_id = "/map"
             marker.id = count
             marker.type = marker.SPHERE
             marker.action = marker.ADD
-            marker.scale.x = 1.0
-            marker.scale.y = 1.0
-            marker.scale.z = 1.0
+            marker.scale.x = 0.1
+            marker.scale.y = 0.1
+            marker.scale.z = 0.1
             marker.color.a = 1.0
             marker.color.r = 1.0
             marker.color.g = 1.0
             marker.color.b = 0.0
-            marker.pose.orientation.w = 1.0
-            marker.pose.position.x = x_data[count]
+
+            # marker.pose.position.x = x_data #debug
+            # marker.pose.position.y = y_data #debug
+
+            marker.pose.position.x = x_data[count] 
             marker.pose.position.y = y_data[count]
             marker.pose.position.z = 1
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
             markerArray.markers.append(marker)
         publisher.publish(markerArray)
 
@@ -327,7 +338,11 @@ class info_sub(object):
         self.map_origin = [0,0,0,0,0,0,0]
         self.robot_pose = [0,0,0,0,0,0,0]
         self.detection = []
+        self.resolution = 0.05
         self.sd_al = SD_algo(self.map_height, self.map_width, 0.05)
+        # for debugging purposes
+        self.map_o = rospy.Publisher('original_map', OccupancyGrid, queue_size=10)
+        self.robot_pose_pub = rospy.Publisher('robot_pose', PoseStamped, queue_size=1)
         # var defined in self.functions
 
         
@@ -355,22 +370,43 @@ class info_sub(object):
         # print("origin: ",self.map_origin)
 
     def map_output(self, map):
-        pyplot.close()
+        # pyplot.close()
         # print(np.array(map.data).shape)
         self.map = np.array(map.data).reshape((self.map_height, self.map_width))
-        lv = map_reconstructor(self.robot_pose, self.detection, self.map) 
+        lv = map_reconstructor(self.robot_pose, self.detection) 
         lv.create_laser_map()
         self.sd_al.update_sd_map(lv.laser_map)
+        # self.map_visualization()
 
 
     def map_visualization(self):
         # tell imshow about color map so that only set colors are used
+        # self.map = self.map.reshape((self.map_width, self.map_height))
+        # cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
+        # bounds=[-6,0,90,200]
+        # norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
+        # img = pyplot.imshow(self.map,cmap = cmap,norm=norm)
+        # pyplot.show(block=False)
+
+
         self.map = self.map.reshape((self.map_width, self.map_height))
-        cmap = matplotlib.colors.ListedColormap(['grey', 'white','black'])
-        bounds=[-6,0,90,200]
-        norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
-        img = pyplot.imshow(self.map,cmap = cmap,norm=norm)
-        pyplot.show(block=False)
+        map_o = OccupancyGrid()
+        map_o.info.width = self.map_width
+        map_o.info.height = self.map_height
+        map_o.info.origin.position.x = -10.0
+        map_o.info.origin.position.y = -10.0
+        map_o.info.origin.position.z =   0.0
+        map_o.info.origin.orientation.x = 0.0
+        map_o.info.origin.orientation.y = 0.0
+        map_o.info.origin.orientation.z = 0.0
+        map_o.info.origin.orientation.w = 1.0
+        map_o.info.resolution = self.resolution
+        data = self.map.astype(int)
+        map_o.data = np.reshape(data.tolist(), (self.map_width * self.map_height))
+        # stat = (self.map.T).astype(int)
+        # map_o.data = np.reshape(self.tolist(), (self.width * self.height))
+        self.map_o.publish(map_o)
+        
 
     def robot_states(self, state):
         # turtlebot3 is at the forth element
@@ -379,7 +415,21 @@ class info_sub(object):
         orien = state.pose[turtlebot3_ind].orientation
         self.robot_pose[:3] = [pose.x, pose.y, pose.z]
         self.robot_pose[3:] = [orien.x, orien.y, orien.z, orien.w]
-        # print(self.robot_pose)
+
+        # debug: visualizing robot pose in rviz
+        pose_pub = PoseStamped()
+        pose_pub.header.stamp = rospy.Time.now()
+        pose_pub.header.frame_id = "/map"
+        pose_pub.pose.position.x = pose.x
+        pose_pub.pose.position.y = pose.y
+        pose_pub.pose.position.z = pose.z
+        pose_pub.pose.orientation.x = orien.x
+        pose_pub.pose.orientation.y = orien.y
+        pose_pub.pose.orientation.z = orien.z
+        pose_pub.pose.orientation.w = orien.w
+        # self.create_linear_motion_task(pose_pub).result()
+        self.robot_pose_pub.publish(pose_pub) 
+
 
     def listener(self):
         rospy.init_node('info_listener', anonymous=True)
