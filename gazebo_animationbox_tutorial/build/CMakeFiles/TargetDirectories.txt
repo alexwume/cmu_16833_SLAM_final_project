@@ -1,0 +1,5 @@
+/home/alex/gazebo_animationbox_tutorial/build/CMakeFiles/independent_listener.dir
+/home/alex/gazebo_animationbox_tutorial/build/CMakeFiles/rebuild_cache.dir
+/home/alex/gazebo_animationbox_tutorial/build/CMakeFiles/animated_box.dir
+/home/alex/gazebo_animationbox_tutorial/build/CMakeFiles/edit_cache.dir
+/home/alex/gazebo_animationbox_tutorial/build/CMakeFiles/integrated_main.dir

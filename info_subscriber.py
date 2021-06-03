@@ -80,7 +80,7 @@ class map_reconstructor(object):
 
 
         # visualize the laser results, this is only for testing purposes
-        self.laser_visualization_rviz(laser_x, laser_y)
+        # self.laser_visualization_rviz(laser_x, laser_y)
 
         ind_x = (laser_x / self.map_resolution).astype(int)
         ind_y = (laser_y / self.map_resolution).astype(int)
@@ -185,6 +185,8 @@ class SD_algo(object):
 
  
         #dynamic map
+                        #   ff   uf   of   fo   uo   oo
+        dynamic_map_para = [0.1, 0.4, 0.1, 0.9, 0.2, 0.05]
 
         # deal with the numerical issue when unknown cell is intialized to -1
         reformed_dynamic_map = self.dynamic_map * nonzero_mask_d + eps *np.ones_like(self.dynamic_map) * ~nonzero_mask_d
@@ -192,32 +194,32 @@ class SD_algo(object):
         tmp = np.log(reformed_dynamic_map / (101 - reformed_dynamic_map))
 
         #free | free
-        tmp1 = np.exp(np.log(0.2 / 0.8) + tmp)
+        tmp1 = np.exp(np.log(dynamic_map_para[0] / (1 - dynamic_map_para[0])) + tmp)
         map_ff = tmp1 /  (1 + tmp1)
         mask_ff = free_mask & laser_free_mask
 
         #unk | free
-        tmp2 = np.exp(np.log(0.2 / 0.8) + tmp)
+        tmp2 = np.exp(np.log(dynamic_map_para[1] / (1 - dynamic_map_para[1])) + tmp)
         map_uf = tmp2 /  (1 + tmp2)
         mask_uf = unk_mask & laser_free_mask
 
         #occ | free
-        tmp3 = np.exp(np.log(0.2 / 0.8) + tmp)
+        tmp3 = np.exp(np.log(dynamic_map_para[2] / (1 - dynamic_map_para[2])) + tmp)
         map_of = tmp3 /  (1 + tmp3)
         mask_of = occ_mask & laser_free_mask
  
         #free | occ
-        tmp4 = np.exp(np.log(0.9 / 0.1) + tmp)
+        tmp4 = np.exp(np.log(dynamic_map_para[3] / (1 - dynamic_map_para[3])) + tmp)
         map_fo = tmp4 /  (1 + tmp4)      
         mask_fo = free_mask & laser_occ_mask
 
         #unk | occ
-        tmp5 = np.exp(np.log(0.3 / 0.7))
+        tmp5 = np.exp(np.log(dynamic_map_para[4] / (1 - dynamic_map_para[4])))
         map_uo = tmp5 /  (1 + tmp5)
         mask_uo = unk_mask & laser_occ_mask
 
         #occ | occ
-        tmp6 = np.exp(np.log(0.3 / 0.7) + tmp)
+        tmp6 = np.exp(np.log(dynamic_map_para[5] / (1 -dynamic_map_para[5])) + tmp)
         map_oo = tmp6 /  (1 + tmp6)
         mask_oo = occ_mask & laser_occ_mask
 
@@ -230,39 +232,42 @@ class SD_algo(object):
         unk_mask_d = self.dynamic_map == -1
         self.dynamic_map = np.clip(self.dynamic_map, 10, 100) * ~unk_mask_d + self.dynamic_map * unk_mask_d         
         #static map
-        
+                        #   ff   uf   of   fo   uo   oo
+        static_map_param = [0.1, 0.1, 0.3, 0.3, 0.9, 0.9]
+
+
         # deal with the numerical issue when unknown cell is intialized to -1
         reformed_static_map = self.static_map * nonzero_mask + eps *np.ones_like(self.static_map) * ~nonzero_mask
 
         tmp = np.log(reformed_static_map / (101 - reformed_static_map))
 
         #free | free
-        tmp1 = np.exp(np.log(0.1 / 0.8) + tmp)
+        tmp1 = np.exp(np.log(static_map_param[0] / (1 - static_map_param[0])) + tmp)
         map_ff = tmp1 /  (1 + tmp1)
         # mask_ff = free_mask & laser_free_mask
 
         #unk | free
-        tmp2 = np.exp(np.log(0.1 / 0.8) + tmp)
+        tmp2 = np.exp(np.log(static_map_param[1] / (1 - static_map_param[1])) + tmp)
         map_uf = tmp2 /  (1 + tmp2)
         # mask_uf = unk_mask & laser_free_mask
 
         #occ | free
-        tmp3 = np.exp(np.log(0.1 / 0.9) + tmp)
+        tmp3 = np.exp(np.log(static_map_param[2] / (1 - static_map_param[2])) + tmp)
         map_of = tmp3 /  (1 + tmp3)
         # mask_of = occ_mask & laser_free_mask
  
         #free | occ
-        tmp4 = np.exp(np.log(0.1 / 0.9) + tmp)
+        tmp4 = np.exp(np.log(static_map_param[3] / (1 - static_map_param[3])) + tmp)
         map_fo = tmp4 /  (1 + tmp4)
         # mask_fo = free_mask & laser_occ_mask
 
         #unk | occ
-        tmp5 = np.exp(np.log(0.9 / 0.1))
+        tmp5 = np.exp(np.log(static_map_param[4] / (1 - static_map_param[4])))
         map_uo = tmp5 /  (1 + tmp5)
         # mask_uo = unk_mask & laser_occ_mask
 
         #occ | occ
-        tmp6 = np.exp(np.log(0.9 / 0.1) + tmp)
+        tmp6 = np.exp(np.log(static_map_param[5] / (1 - static_map_param[5])) + tmp)
         map_oo = tmp6 /  (1 + tmp6)
         # mask_oo = occ_mask & laser_occ_mask
 
